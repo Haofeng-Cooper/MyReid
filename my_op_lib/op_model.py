@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 
 from enum import Enum
-from .params_body_25 import *
+from my_op_lib.params_body_25 import *
 
 
 class OpModel(Enum):
