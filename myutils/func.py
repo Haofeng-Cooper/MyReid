@@ -59,4 +59,35 @@ def mkdir_if_missing(folder_path):
                 os.mkdir(item)
     elif isinstance(folder_path, str):
         if not os.path.exists(folder_path):
-            os.mkdir(folder_path)
+            os.makedirs(folder_path)
+
+
+def format_seconds(seconds):
+    """
+    将秒数转化为天、时、分、秒字符串
+    :param seconds:
+    :return:
+    """
+    factor_minute = 60
+    factor_hour = factor_minute * 60
+    factor_day = factor_hour * 24
+
+    seconds = int(seconds)
+
+    days = seconds // factor_day
+    seconds -= days * factor_day
+
+    hours = seconds // factor_hour
+    seconds -= hours * factor_hour
+
+    minutes = seconds // factor_minute
+    seconds -= minutes * factor_minute
+
+    if days > 0:
+        return "{}天{}时{}分{}秒".format(days, hours, minutes, seconds)
+    elif hours > 0:
+        return "{}时{}分{}秒".format(hours, minutes, seconds)
+    elif minutes > 0:
+        return "{}分{}秒".format(minutes, seconds)
+    else:
+        return "{}秒".format(seconds)
