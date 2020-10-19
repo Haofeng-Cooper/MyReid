@@ -1,7 +1,8 @@
 # -*- coding: utf-8 -*-
 
 import os
-from functools import singledispatch
+import platform
+import shutil
 
 
 def positive_round(x):
@@ -91,3 +92,11 @@ def format_seconds(seconds):
         return "{}分{}秒".format(minutes, seconds)
     else:
         return "{}秒".format(seconds)
+
+
+def copy_file(src_file, dst_file):
+    if platform.system() == "Linux":
+        command = ("cp %s %s" % (src_file, dst_file))
+        os.system(command)
+    else:
+        shutil.copy(src_file, dst_file)

@@ -5,7 +5,7 @@ import os.path as osp
 import cv2
 import time
 
-from myutils.func import mkdir_if_missing, clear_folder, format_seconds
+from myutils.func import mkdir_if_missing, clear_folder, copy_file
 from data.myop.opmain import process_images, render_pose
 
 
@@ -32,6 +32,7 @@ class MyDataSet:
         tmp_folder_json = osp.join(tmp_folder, "json")
         mkdir_if_missing(tmp_folder_rendered)
         mkdir_if_missing(tmp_folder_json)
+        clear_folder([tmp_folder_rendered, tmp_folder_json])
 
         dst_folder_src = osp.join(dst_folder, "src")
         dst_folder_rendered = osp.join(dst_folder, "rendered")
@@ -41,6 +42,7 @@ class MyDataSet:
         mkdir_if_missing(dst_folder_rendered)
         mkdir_if_missing(dst_folder_json)
         mkdir_if_missing(dst_folder_pose)
+        clear_folder([dst_folder_src, dst_folder_rendered, dst_folder_json, dst_folder_pose])
 
         for cam_index, person_list in enumerate(self.folder_list):
             for person_index, person_folder in enumerate(person_list):
@@ -57,20 +59,18 @@ class MyDataSet:
                     cv2.imwrite(save_path, pose_image)
 
                     # 拷贝源图像文件到目标类目录下并重命名
-                    command_cp_src = 'cp %s %s' % (osp.join(person_folder, image_name),
-                                                   osp.join(dst_folder_src, base_name+image_format))
-                    os.system(command_cp_src)
+                    copy_file(osp.join(person_folder, image_name),
+                              osp.join(dst_folder_src, base_name+image_format))
                     # 拷贝tmp文件到dst
-                    command_cp_rendered = 'cp %s %s' % (osp.join(tmp_folder_rendered, rendered_list[image_index]),
-                                                        osp.join(dst_folder_rendered, base_name+image_format))
-                    os.system(command_cp_rendered)
-                    command_cp_json = 'cp %s %s' % (json_path, osp.join(dst_folder_json, base_name+".json"))
-                    os.system(command_cp_json)
+                    copy_file(osp.join(tmp_folder_rendered, rendered_list[image_index]),
+                              osp.join(dst_folder_rendered, base_name+image_format))
+                    copy_file(json_path, osp.join(dst_folder_json, base_name+".json"))
                 clear_folder([tmp_folder_rendered, tmp_folder_json])
                 print("%02d %05d finished" % (cam_index, person_index))
 
 
 if __name__ == "__main__":
-    dataset = MyDataSet("D:/reid_datasets/prid_2011/multi_shot", "../openpose/bin/OpenPoseDemo.exe")
+     # dataset = MyDataSet("D:/reid_datasets/prid_2011/multi_shot", "../openpose/bin/OpenPoseDemo.exe")
+    dataset = MyDataSet("D:/test/dataset", "../openpose/bin/OpenPoseDemo.exe")
     dataset.fill_folder_list()
-    dataset.process(tmp_folder="D:/tmp", dst_folder="D:/test", image_shape=(640, 320), image_format=".png")
+    dataset.process(tmp_folder="D:/test/tmp", dst_folder="D:/test/result", image_shape=(128, 64), image_format=".png")
