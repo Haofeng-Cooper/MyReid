@@ -52,7 +52,7 @@ class MyDataSet:
                 image_list = os.listdir(person_folder)
                 for image_index, image_name in enumerate(image_list):
                     # 生成pose并保存
-                    base_name = "%05d_%02d_%05d" % (person_index, cam_index, image_index)
+                    base_name = "%02d_%05d_%05d" % (cam_index, person_index, image_index)
                     json_path = osp.join(tmp_folder_json, json_list[image_index])
                     pose_image = render_pose(json_path, image_shape)
                     save_path = osp.join(dst_folder_pose, base_name+image_format)
