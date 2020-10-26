@@ -67,10 +67,3 @@ class MyDataSet:
                     copy_file(json_path, osp.join(dst_folder_json, base_name+".json"))
                 clear_folder([tmp_folder_rendered, tmp_folder_json])
                 print("%02d %05d finished" % (cam_index, person_index))
-
-
-if __name__ == "__main__":
-     # dataset = MyDataSet("D:/reid_datasets/prid_2011/multi_shot", "../openpose/bin/OpenPoseDemo.exe")
-    dataset = MyDataSet("D:/test/dataset", "../openpose/bin/OpenPoseDemo.exe")
-    dataset.fill_folder_list()
-    dataset.process(tmp_folder="D:/test/tmp", dst_folder="D:/test/result", image_shape=(128, 64), image_format=".png")
