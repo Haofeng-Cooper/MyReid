@@ -8,16 +8,33 @@ import cv2
 
 def dataset_reader(folder: str):
     """将目标文件夹下的图像文件数据读取出来，返回numpy-ndarray的list"""
-    cam_num, person_num = -1, -1
+    cam_max, person_max = 0, 0
     files_list = list(sorted(glob(osp.join(folder, "*.png"))))
     for filename in files_list:
         names_list = osp.basename(filename).split('.')[0].split('_')
         cam_id, person_id, image_id = int(names_list[0]), int(names_list[1]), int(names_list[2])
-        if cam_id > cam_num:
-            cam_num = cam_id + 1
-        if person_id > person_num:
-            person_num = person_id + 1
-    print(cam_num, person_num)
+        # print("doing: ", cam_id, person_id, image_id)
+        if cam_id >= cam_max:
+            cam_max = cam_id + 1
+        if person_id >= person_max:
+            person_max = person_id + 1
+    print(cam_max, person_max)
+
+    tmp_lists = [[[] for _ in range(person_max)] for _ in range(cam_max)]
+    for filename in files_list:
+        names_list = osp.basename(filename).split('.')[0].split('_')
+        cam_id, person_id = int(names_list[0]), int(names_list[1])
+        tmp_lists[cam_id][person_id].append(cv2.imread(filename))
+    images_lists = []
+    for cam_id in range(cam_max):
+        cam_images = []
+        for person_id in range(person_max):
+            if len(tmp_lists[cam_id][person_id]) > 0:
+                cam_images.append(tmp_lists[cam_id][person_id])
+        images_lists.append(cam_images)
+    print("xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx")
+    for i in range(len(images_lists)):
+        print(len(images_lists[i]))
 
 
 def get_frames(folder: str, person_index: int, cam_index: int):
@@ -37,8 +54,25 @@ def get_frames(folder: str, person_index: int, cam_index: int):
         raise ValueError("目标文件夹不存在！" + folder)
 
 
-
-
+def get_snippet_indices(seq_len, sni_len=8, stride=3):
+    """
+    对视频序列进行片段分割
+    :param seq_len: 序列长度
+    :param sni_len: 分割的片段长度
+    :param stride: 分割的步长
+    :return: [[],[],...] 所有分割的下标
+    """
+    result = []
+    if seq_len <= sni_len:
+        snippet = list(range(sni_len))
+        snippet[seq_len:sni_len] = [seq_len-1 for _ in range(sni_len-seq_len)]
+        result.append(snippet)
+    else:
+        snippet_num = (seq_len - sni_len) // stride + 1
+        for i in range(snippet_num):
+            snippet_i = list(range(i*stride, i*stride+sni_len))
+            result.append(snippet_i)
+    return result
 
 
 if __name__ == '__main__':
@@ -47,6 +81,10 @@ if __name__ == '__main__':
     # for frame in frames:
     #     print(frame)
 
-    dataset_reader("D:/datasets/dst/prid_2011/src")
+    # dataset_reader("D:/datasets/dst/prid_2011/src")
+    # dataset_reader("D:/test/result/src")
 
-
+    indices = get_snippet_indices(15)
+    for index_list in indices:
+        print(index_list)
+    print(indices)
