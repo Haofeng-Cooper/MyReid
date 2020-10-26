@@ -67,7 +67,7 @@ def __sample_by_indices(seq, index_list: list):
     return snippet
 
 
-def get_snippet_indices(seq, sni_len=8, stride=3, only_index=True):
+def get_snippet_indices(seq, sni_len=8, stride=3, only_index=False):
     """
     对视频序列进行片段分割
     :param seq: 帧序列
@@ -106,6 +106,7 @@ if __name__ == '__main__':
     # dataset_reader("D:/datasets/dst/prid_2011/src")
     # dataset_reader("D:/test/result/src")
 
-    indices = get_snippet_indices(list(range(100, 120)), only_index=False)
+    # indices = get_snippet_indices(list(range(100, 120)), only_index=False)
+    indices = get_snippet_indices(list(range(100, 120)))
     for index_list in indices:
         print(index_list)
