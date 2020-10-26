@@ -54,25 +54,47 @@ def get_frames(folder: str, person_index: int, cam_index: int):
         raise ValueError("目标文件夹不存在！" + folder)
 
 
-def get_snippet_indices(seq_len, sni_len=8, stride=3):
+def __sample_by_indices(seq, index_list: list):
+    """
+    按下标列表对序列进行采样
+    :param seq: 数据list
+    :param index_list: 要使用的元素在seq中的下标集合
+    :return: 采样的片段
+    """
+    snippet = []
+    for i in range(len(index_list)):
+        snippet.append(seq[index_list[i]])
+    return snippet
+
+
+def get_snippet_indices(seq, sni_len=8, stride=3, only_index=True):
     """
     对视频序列进行片段分割
-    :param seq_len: 序列长度
+    :param seq: 帧序列
     :param sni_len: 分割的片段长度
     :param stride: 分割的步长
+    :param only_index 是否只获取每个片段的下标
     :return: [[],[],...] 所有分割的下标
     """
-    result = []
+    result_indices = []
+    seq_len = len(seq)
     if seq_len <= sni_len:
-        snippet = list(range(sni_len))
-        snippet[seq_len:sni_len] = [seq_len-1 for _ in range(sni_len-seq_len)]
-        result.append(snippet)
+        snippet_indices = list(range(sni_len))
+        snippet_indices[seq_len:sni_len] = [seq_len-1 for _ in range(sni_len-seq_len)]
+        result_indices.append(snippet_indices)
     else:
         snippet_num = (seq_len - sni_len) // stride + 1
         for i in range(snippet_num):
-            snippet_i = list(range(i*stride, i*stride+sni_len))
-            result.append(snippet_i)
-    return result
+            snippet_i_indices = list(range(i*stride, i*stride+sni_len))
+            result_indices.append(snippet_i_indices)
+
+    if only_index:
+        return result_indices
+    else:
+        result = []
+        for i in range(len(result_indices)):
+            result.append(__sample_by_indices(seq, result_indices[i]))
+        return result
 
 
 if __name__ == '__main__':
@@ -84,7 +106,6 @@ if __name__ == '__main__':
     # dataset_reader("D:/datasets/dst/prid_2011/src")
     # dataset_reader("D:/test/result/src")
 
-    indices = get_snippet_indices(15)
+    indices = get_snippet_indices(list(range(100, 120)), only_index=False)
     for index_list in indices:
         print(index_list)
-    print(indices)
