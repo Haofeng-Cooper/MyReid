@@ -23,6 +23,9 @@ class MyDataSet:
             cam_path = osp.join(self.root_path, cam_name)
             person_list = os.listdir(cam_path)
             for person_name in person_list:
+                person_id = int(person_name.split('_')[1])
+                if person_id > 200:
+                    continue
                 person_path = osp.join(cam_path, person_name)
                 path_list.append(person_path)
             self.folder_list.append(path_list)
@@ -43,6 +46,7 @@ class MyDataSet:
         mkdir_if_missing(dst_folder_json)
         mkdir_if_missing(dst_folder_pose)
         clear_folder([dst_folder_src, dst_folder_rendered, dst_folder_json, dst_folder_pose])
+        print("目标目录建立-清空完毕")
 
         for cam_index, person_list in enumerate(self.folder_list):
             for person_index, person_folder in enumerate(person_list):
