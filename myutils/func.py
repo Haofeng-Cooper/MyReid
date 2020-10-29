@@ -8,6 +8,7 @@ import json
 import numpy as np
 import random
 import cv2
+import torch
 
 
 def positive_round(x):
@@ -131,12 +132,6 @@ def list_sublist(seq: list, index_list: list):
     return sub
 
 
-def write_json_file(data_dict, json_file_path):
-    json_str = json.dumps(data_dict, indent=4)
-    with open(json_file_path, 'w') as f:
-        f.write(json_str)
-
-
 def list_shape(_list: list):
     return np.array(_list).shape
 
@@ -253,3 +248,25 @@ def channel_mean_std(data_list: list):
     print("共计{}张图像，{}个像素".format(image_count, pixel_count))
     print("mean={}, std={}".format(mean, std))
     return mean, std
+
+
+def ndarray_list_2_tensor(array_list: list, transforms, grad=True):
+    """
+    numpy.ndarray的list转tensor
+    """
+    length = len(array_list)
+    tensor_list = []
+    for i in range(length):
+        tensor_list.append(transforms(array_list[i]))
+    return torch.stack(tensor_list, 0).requires_grad_(grad)
+
+
+def ndarray4d_2_tensor(ndarray, transforms, grad=True):
+    """
+    4d的numpy.ndarray转tensor
+    """
+    n = ndarray.shape[0]
+    tensor_list = []
+    for i in range(n):
+        tensor_list.append(transforms(ndarray[i]))
+    return torch.stack(tensor_list, 0).requires_grad_(grad)
