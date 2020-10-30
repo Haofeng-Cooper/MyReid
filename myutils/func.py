@@ -114,7 +114,7 @@ def print_process(cur, total, sign_num=20, sign_ch='#'):
     """
     rate = cur / total
     show_sign_num = max(int(rate * sign_num), 1)
-    print('\r进度：%s %.2f%%\t%d/%d' % (sign_ch*show_sign_num, rate*100, cur, total), end='')
+    print('\r进度：%s %.2f%%\t%d/%d\t' % (sign_ch*show_sign_num, rate*100, cur, total), end='')
     if cur == total:
         print("")
 
@@ -250,7 +250,7 @@ def channel_mean_std(data_list: list):
     return mean, std
 
 
-def ndarray_list_2_tensor(array_list: list, transforms, grad=True):
+def ndarrays_2_tensor(array_list: list, transforms, grad=True):
     """
     numpy.ndarray的list转tensor
     """
@@ -265,6 +265,7 @@ def ndarray4d_2_tensor(ndarray, transforms, grad=True):
     """
     4d的numpy.ndarray转tensor
     """
+    print(ndarray.shape)
     n = ndarray.shape[0]
     tensor_list = []
     for i in range(n):

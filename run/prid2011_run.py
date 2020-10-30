@@ -10,46 +10,14 @@ from torch import optim
 import torchvision.transforms as trans
 
 from model.resnet import ResNet
-from data.dataset.dataloader import dataset_reader, get_snippet_indices, snippets_list_concat
 from myutils.func import *
 from myutils.fileutils import write_json_file, read_json_file
-
-from data.dataset.dataloader import dataset_reader2, train_data_loader
-
-
-def get_splits(filepath, person_num=200, train_rate=0.5, repeat_num=10):
-    """
-    获取train/test分割,
-    其中：
-        person_num=200是指prid2011数据集只使用前200人的一共400个视频序列，是为了和前人的工作保持一致。
-        train_rate=0.5指一半用于训练，一半用于测试，也是为了和前人的工作保持一致。
-        repeat_num=10指重复10次，也即随机进行10次train/test分割（最后的结果取均值），同样是为了和前人的工作保持一致。
-    """
-    train_num = positive_round(person_num * train_rate)
-
-    if osp.isfile(filepath):
-        with open(filepath, 'r') as f:
-            json_data = json.load(fp=f)
-            p_num, t_num, r_num = json_data["person_num"], json_data["train_num"], len(json_data["splits"])
-            if p_num == person_num and t_num == train_num and r_num == repeat_num:
-                print("使用分割文件：", filepath)
-                return json_data['splits']
-
-    print("重新生成分割文件：", filepath)
-    splits = []
-    person_ids = list(range(person_num))
-    for i in range(repeat_num):
-        train_ids = random.sample(person_ids, train_num)
-        train_ids.sort()
-        test_ids = list(set(person_ids).difference(set(train_ids)))
-
-        d = {'split_id': i, "train_ids": train_ids, "test_ids": test_ids}
-        splits.append(d)
-    write_json_file({"person_num": person_num, "train_num": train_num,  "splits": splits}, filepath)
-    return splits
+from myutils.listutils import list_sort
+from myutils.calc import AverageCalc
+from data.dataset.dataloader import dataset_reader2, train_data_loader2, test_data_loader
 
 
-def get_splits2(save_file, person_ids: list, train_rate=0.5, repeat_num=10, shuffle=True, force_re=False):
+def get_splits(save_file, person_ids: list, train_rate=0.5, repeat_num=10, shuffle=True, force_re=False):
     """
     对行人索引列表进行train/test分割，并将结果保存到指定文件中。
     如果文件已存在，则优先从文件中读取数据。
@@ -86,79 +54,158 @@ def get_splits2(save_file, person_ids: list, train_rate=0.5, repeat_num=10, shuf
     return splits
 
 
-def sample_dataset(seq_list, snippet_len=8, stride=3):
-    """
-    对seq_list的每一个seq分段，每个seq都是一个行人在某个相机下的所有图像。
-    返回所有人的所有snippet
-    """
-    result = []
-    for seq in seq_list:
-        result.append(get_snippet_indices(seq=seq, snippet_len=snippet_len, stride=stride, only_index=False))
-    return result
+@torch.no_grad()
+def check_top_k(test_data, probe_ids, gallery_ids, transforms, net_model, device, top_k=(1, 5, 10, 20)):
+    # person_num = len(test_ids)
+    probe_seqs, gallery_seqs = test_data[0], test_data[1]
+    probe_num, gallery_num = len(probe_seqs), len(gallery_seqs)
+    # 先对每一个seq生成对应的特征向量
+    probe_fvs, gallery_fvs = [], []
+    for i in range(probe_num):
+        p_seq = ndarrays_2_tensor(probe_seqs[i], transforms, grad=False)
+        p_seq = p_seq.to(device)
+        p_fv = net_model(p_seq)
+        probe_fvs.append(torch.unsqueeze(p_fv, dim=0))
+    for i in range(gallery_num):
+        g_seq = ndarrays_2_tensor(gallery_seqs[i], transforms, grad=False)
+        g_seq = g_seq.to(device)
+        g_fv = net_model(g_seq)
+        gallery_fvs.append(torch.unsqueeze(g_fv, dim=0))
+
+    # 计算特征向量的距离或相似度
+    dist_matrix = np.zeros(shape=(probe_num, gallery_num), dtype=np.float)
+    for i in range(probe_num):
+        for j in range(gallery_num):
+            dist_matrix[i][j] = torch.pairwise_distance(probe_fvs[i], gallery_fvs[j]).item()
+
+    # 获得按距离由小到大或相似度由大到小的gallery-label二维数组，一维为对应的probe下标
+    pid_matrix = []
+    for i in range(probe_num):
+        pid_matrix.append(list_sort(gallery_ids, dist_matrix[i], "ASC"))
+
+    # 计算每个probe的top-k
+    top_k_matrix = np.zeros(shape=(probe_num, len(top_k)), dtype=np.int)
+    for i in range(probe_num):
+        for j in range(len(top_k)):
+            k = top_k[j]
+            probe_id = probe_ids[i]
+            first_k = list(pid_matrix[i][0:k])
+            if probe_id in first_k:
+                top_k_matrix[i][j] = 1
+
+    # 计算整个probe上的平均top-k
+    avg_top_k = np.mean(top_k_matrix, axis=0)     # 按列求均值
+    return avg_top_k
 
 
-def element_index(e_index, start_index_list):
-    """获取元素对应的下标"""
-    for i in range(len(start_index_list)-1):
-        start_index, end_index = start_index_list[i], start_index_list[i+1]
-        if start_index <= e_index < end_index:
-            return i
-    return -1
+def is_better_top_k(old_top_k, new_top_k):
+    for i in range(len(old_top_k)):
+        if new_top_k[i] > old_top_k[i]:
+            return True
+    return False
 
 
-def main2(dataset_folder, data_npz_file, epoch_train=30):
+def get_model_params_file_name(k, top_k):
+    filename = "model_1_params"
+    for i in range(len(k)):
+        filename += ("_top%d_%.3f" % (k[i], top_k[i]))
+    filename += ".pth"
+    return filename
+
+
+def save_model_params(k, top_k, model_folder, model):
+    filename = get_model_params_file_name(k, top_k)
+    filepath = osp.join(model_folder, filename)
+    torch.save(model.state_dict(), filepath)
+    print("保存模型参数到：" + filepath)
+
+
+def main(dataset_folder, data_npz_file, epoch_train=100, batch_size=8, snippet_len=8, snippet_stride=3,
+         model_folder=".", model_file="none.pth"):
     image_array, seq_range_array, cam_offset_array = dataset_reader2(dataset_folder, data_npz_file, force_re=False)
+
     # 取第一个相机下的所有行人索引作为整个数据集的所有行人索引
     person_ids = list(seq_range_array[:, 0][cam_offset_array[0]:cam_offset_array[1]])
+
+    '''
     # 取第一个相机为probe，第二个相机为gallery，则第二个相机下第一个人的起始帧索引为probe和gallery的分割索引
-    probe_gallery_split_index = seq_range_array[cam_offset_array[1]][1]
-    probe_set = image_array[:probe_gallery_split_index]
-    gallery_set = image_array[probe_gallery_split_index:]
+    # probe_gallery_split_index = seq_range_array[cam_offset_array[1]][1]
+    # probe_set = image_array[:probe_gallery_split_index]
+    # gallery_set = image_array[probe_gallery_split_index:]
+    '''
 
     # 计算整个数据集上数据的均值和标准差
-    # mean_value, std_value = [0.0 for _ in range(3)], [0.0 for _ in range(3)]
-    # for i in range(3):
-    #     channel_data = image_array[:, :, :, i] / 255
-    #     mean_value[i] = round(np.mean(channel_data), 4)
-    #     std_value[i] = round(np.std(channel_data), 4)
+    '''
+    mean_value, std_value = [0.0 for _ in range(3)], [0.0 for _ in range(3)]
+    for i in range(3):
+        channel_data = image_array[:, :, :, i] / 255
+        mean_value[i] = round(np.mean(channel_data), 4)
+        std_value[i] = round(np.std(channel_data), 4)
+    '''
     mean_value, std_value = [0.4348, 0.4756, 0.3638], [0.1634, 0.1705, 0.1577]
 
-    splits = get_splits2("./prid2011_splits.json", person_ids, shuffle=True, force_re=False)
-    batch_size = 8
+    # 获取分割数据
+    splits = get_splits("./prid2011_splits.json", person_ids, shuffle=True, force_re=False)
     transforms = trans.Compose([
         trans.ToTensor(),           # 如果是numpy-ndarray且dtype=unint8会自动除以255，且维度由(h, w, c)变成(c, h, w)
         trans.Normalize(mean=mean_value, std=std_value)
     ])
 
     device = (torch.device("cuda:0") if torch.cuda.is_available() else torch.device("cpu"))
+    # 网络定义
+    top_k = (1, 5, 10, 20)
+    better_top_k = [.0 for _ in range(len(top_k))]
     net = ResNet(out_features=1000, final_pool="avg")
+    old_model_file = osp.join(model_folder, model_file)
+    if osp.isfile(old_model_file):
+        net.load_state_dict(torch.load(old_model_file))
+        print("加载模型参数文件；" + old_model_file)
+    else:
+        print("未加载任何模型参数文件")
     net = net.cuda(device=device)
 
+    # 损失函数和优化器
     triplet_loss = torch.nn.TripletMarginLoss(margin=1.0, p=2)
     optimizer = optim.SGD(net.parameters(), lr=0.001, momentum=0.9)
+    first_run_check_top_k = True
 
-    for split_id, split in enumerate(splits):
-        train_ids, test_ids = split["train_ids"], split["test_ids"]
-        train_data = train_data_loader(train_ids, image_array, seq_range_array, cam_offset_array, batch_size=batch_size)
+    for epoch_id in range(epoch_train):
+        for split_id, split in enumerate(splits):
+            train_ids, test_ids = split["train_ids"], split["test_ids"]
+            train_data = train_data_loader2(train_ids, image_array, seq_range_array, cam_offset_array,
+                                            batch_size=batch_size, shuffle=True,
+                                            snippet_len=snippet_len, snippet_stride=snippet_stride)
+            test_data = test_data_loader(test_ids, image_array, seq_range_array, cam_offset_array)
 
-        for epoch_id in range(epoch_train):
+            if first_run_check_top_k:
+                mean_top_k = check_top_k(test_data, test_ids, test_ids, transforms=transforms,
+                                         net_model=net, device=device, top_k=top_k)
+                print("first run, check top-k. top-k: %s" % mean_top_k)
+                first_run_check_top_k = False
+                if is_better_top_k(old_top_k=better_top_k, new_top_k=mean_top_k):
+                    better_top_k = mean_top_k[:]
+                    save_model_params(k=top_k, top_k=better_top_k, model_folder=model_folder, model=net)
+
+            running_loss = AverageCalc()
+            batch_id = 0
             for batch_id, batch_data in enumerate(train_data):
-                batch_loss = 0.0
-                for anc_sample, pos_sample, neg_sample in batch_data:
+                anchors_output, positives_output, negatives_output = [], [], []
+                for i in range(batch_size):
                     optimizer.zero_grad()
+                    anchor_i, positive_i, negative_i = batch_data[i][0], batch_data[i][1], batch_data[i][2]
 
-                    # print(anc_sample.shape, pos_sample.shape, neg_sample.shape)
-                    # draw_4d_list(anc_sample, "anchor", max_cols=10)
-                    # draw_4d_list(pos_sample, "positive", max_cols=10)
-                    # draw_4d_list(neg_sample, "negative", max_cols=10)
+                    # print(list_shape(anchor_i), list_shape(positive_i), list_shape(negative_i))
+                    # draw_4d_list(anchor_i, "anchor", max_cols=4)
+                    # draw_4d_list(positive_i, "positive", max_cols=4)
+                    # draw_4d_list(negative_i, "negative", max_cols=4)
                     # cv2.waitKey(0)
                     # cv2.destroyAllWindows()
                     # exit(1)
 
                     # ndarray转变为tensor和数据预处理
-                    input_anchor = ndarray4d_2_tensor(anc_sample, transforms, grad=True)
-                    input_positive = ndarray4d_2_tensor(pos_sample, transforms, grad=True)
-                    input_negative = ndarray4d_2_tensor(neg_sample, transforms, grad=True)
+                    input_anchor = ndarrays_2_tensor(anchor_i, transforms, grad=True)
+                    input_positive = ndarrays_2_tensor(positive_i, transforms, grad=True)
+                    input_negative = ndarrays_2_tensor(negative_i, transforms, grad=True)
 
                     # 转移到cuda上
                     input_anchor = input_anchor.to(device)
@@ -172,169 +219,42 @@ def main2(dataset_folder, data_npz_file, epoch_train=30):
                     output_negative = net(input_negative)
                     # print("output_anchor", output_anchor.shape)
 
-                    # 计算损失
-                    loss = triplet_loss(output_anchor, output_positive, output_negative)
-                    loss.backward()  # 误差反向传播，计算梯度
-                    optimizer.step()  # 更新权重
+                    anchors_output.append(output_anchor)
+                    positives_output.append(output_positive)
+                    negatives_output.append(output_negative)
 
-                    batch_loss += loss.item()
-                batch_loss = batch_loss / batch_size
-                print("split: %d \t epoch: %d \t batch: %d \t batch_avg_loss:%f" %
-                      (split_id, epoch_id, batch_id, batch_loss))
+                # 计算损失
+                anchors_output = torch.stack(anchors_output, dim=0)
+                positives_output = torch.stack(positives_output, dim=0)
+                negatives_output = torch.stack(negatives_output, dim=0)
 
-
-def main(dataset_folder, epoch_train_num=30):
-    device = (torch.device("cuda:0") if torch.cuda.is_available() else torch.device("cpu"))
-
-    model = ResNet(out_features=1000, final_pool="avg")
-    model.to(device)
-
-    data_list = dataset_reader(dataset_folder)
-    # 只使用前200人的数据，且以cam_a为probe，cam_b为gallery
-    probe_set, gallery_set = data_list[0][:200], data_list[1][:200]
-
-    # mean, std = channel_mean_std([probe_set[:], gallery_set[:]])
-    # exit(0)
-    mean, std = [0.4348, 0.4756, 0.3638], [0.1634, 0.1705, 0.1577]
-
-    transforms = trans.Compose([
-        trans.ToTensor(),           # 如果是numpy-ndarray且dtype=unint8会自动除以255，且维度由(h, w, c)变成(c, h, w)
-        trans.Normalize(mean=mean, std=std)
-    ])
-
-    triplet_loss = torch.nn.TripletMarginLoss(margin=1.0, p=2)
-    optimizer = optim.SGD(model.parameters(), lr=0.001, momentum=0.9)
-
-    # 在不同的分割上进行同样次数的训练
-    split_num = 10
-    split_list = get_splits('./prid2011_splits.json')
-    for split_id in range(split_num):
-        cur_split = split_list[split_id]
-        cur_train_ids, cur_test_ids = cur_split["train_ids"], cur_split["test_ids"]
-        # 获取当前分割对应的训练和测试数据
-        cur_train_probe_list = shuffle_list(probe_set, cur_train_ids)
-        cur_test_probe_list = shuffle_list(probe_set, cur_test_ids)
-        cur_train_gallery_list = shuffle_list(gallery_set, cur_train_ids)
-        cur_test_gallery_list = shuffle_list(gallery_set, cur_test_ids)
-
-        # print(list_shape(cur_train_probe_list), list_shape(cur_test_probe_list),
-        #       list_shape(cur_train_gallery_list), list_shape(cur_test_gallery_list))
-
-        # 训练和测试数据进行片段划分
-        train_probe_snippets_list = sample_dataset(cur_train_probe_list)
-        train_gallery_snippets_list = sample_dataset(cur_train_gallery_list)
-        test_probe_snippets_list = sample_dataset(cur_test_probe_list)
-        test_gallery_snippets_list = sample_dataset(cur_test_gallery_list)
-        # 每一个snippets_list，[i]=e，e是train/test-probe/gallery下第i个行人的所有视频片段list
-        # (person_num * snippets_num * H * W * 3)，其中snippets_num是不相同的
-
-        # 将所有人的所有片段拼接到一块，获取每个片段对应的真实行人标签
-        train_probe_snippets, train_probe_labels, trp_start_indices = snippets_list_concat(train_probe_snippets_list, cur_train_ids)
-        train_gallery_snippets, train_gallery_labels, trg_start_indices = snippets_list_concat(train_gallery_snippets_list, cur_train_ids)
-        test_probe_snippets, test_probe_labels, tep_start_indices = snippets_list_concat(test_probe_snippets_list, cur_test_ids)
-        test_gallery_snippets, test_gallery_labels, teg_start_indices = snippets_list_concat(test_gallery_snippets_list, cur_test_ids)
-
-        # print(list_shape(train_probe_snippets), list_shape(train_gallery_snippets),
-        #       list_shape(test_probe_snippets), list_shape(test_gallery_snippets))
-        # print(list_shape(train_probe_labels), list_shape(train_gallery_labels),
-        #       list_shape(test_probe_labels), list_shape(test_gallery_labels))
-        # print(list_shape(trp_start_indices), list_shape(trg_start_indices),
-        #       list_shape(tep_start_indices), list_shape(teg_start_indices))
-        # (3520, 8, 128, 64, 3) (2637, 8, 128, 64, 3) (3865, 8, 128, 64, 3) (2532, 8, 128, 64, 3)
-        # (3520,)(2637, )(3865, )(2532, )
-        # (101,)(101, )(101, )(101, )
-
-        # shuffle, not now, todo
-
-        for epoch in range(epoch_train_num):
-            running_loss = 0.0
-            running_loss_avg_num = 100
-
-            # 训练
-            snippet_index = 0
-            for snippet_index, snippet in enumerate(train_probe_snippets):
-                optimizer.zero_grad()
-
-                snippet_anchor = snippet[:]  # 拷贝
-                person_label = train_probe_labels[snippet_index]
-
-                # 在gallery中找一个正样本
-                positive_start_index_index = 0
-                for t in range(len(trg_start_indices) - 1):
-                    start_index_t, start_index_tn = trg_start_indices[split_id], trg_start_indices[split_id + 1]
-                    if start_index_t <= snippet_index < start_index_tn:
-                        positive_start_index_index = t
-                        break
-                positive_snippet_index = random.randrange(trg_start_indices[positive_start_index_index],
-                                                          trg_start_indices[positive_start_index_index + 1])
-                snippet_positive = train_gallery_snippets[positive_snippet_index]
-
-                # 在gallery中找一个负样本
-                negative_start_index_index = rand_range(0, len(trg_start_indices) - 1, positive_start_index_index)
-                negative_snippet_index = random.randrange(trg_start_indices[negative_start_index_index],
-                                                          trg_start_indices[negative_start_index_index + 1])
-                snippet_negative = train_gallery_snippets[negative_snippet_index]
-
-                print("anchor行人索引：{}\tpositive行人索引：{}\tnegative行人索引：{}".format(
-                    person_label, train_gallery_labels[positive_snippet_index],
-                    train_gallery_labels[negative_snippet_index]))
-
-                # show examples
-                # draw_4d_list(snippet_anchor, "anchor")
-                # draw_4d_list(snippet_positive, "positive")
-                # draw_4d_list(snippet_negative, "negative")
-                # cv2.waitKey(0)
-                # cv2.destroyAllWindows()
-
-                # print(type(snippet_anchor), type(snippet_anchor[0]))
-                # <class 'list'> <class 'numpy.ndarray'>
-
-                snippet_anchor = ndarray_list_2_tensor(snippet_anchor, transforms)
-                snippet_positive = ndarray_list_2_tensor(snippet_positive, transforms)
-                snippet_negative = ndarray_list_2_tensor(snippet_negative, transforms)
-
-                snippet_anchor = snippet_anchor.to(device)
-                snippet_positive = snippet_positive.to(device)
-                snippet_negative = snippet_negative.to(device)
-
-                anchor_out = model(snippet_anchor)
-                positive_out = model(snippet_positive)
-                negative_out = model(snippet_negative)
-                # print(anchor_out)
-                # exit(0)
-                # print(anchor_out.shape, positive_out.shape, negative_out.shape)
-                # out size: (out_features)
-
-                anchor_out = torch.unsqueeze(anchor_out, dim=0)
-                positive_out = torch.unsqueeze(positive_out, dim=0)
-                negative_out = torch.unsqueeze(negative_out, dim=0)
-                # print(anchor_out.shape, positive_out.shape, negative_out.shape)
-                # out size: (1 x out_features)
-                exit(0)
-
-                loss = triplet_loss(anchor_out, positive_out, negative_out)
+                loss = triplet_loss(anchors_output, positives_output, negatives_output)
                 loss.backward()  # 误差反向传播，计算梯度
                 optimizer.step()  # 更新权重
 
-                running_loss += loss.item()
-                if (snippet_index+1) % running_loss_avg_num == 0:
-                    print("split: %d\t epoch: %d\t snippet: %d\t avg_loss: %.3f" %
-                          (split_id + 1, epoch + 1, snippet_index + 1, running_loss / running_loss_avg_num))
-                    running_loss = 0.0
-            print("split: %d\t epoch: %d\t snippet: %d\t avg_loss: %.3f" %
-                  (split_id + 1, epoch + 1, snippet_index + 1, running_loss / running_loss_avg_num))
+                running_loss.update(loss.item())
+                # print_process(batch_id+1, batch_num)
+                if (batch_id + 1) % 5 == 0:
+                    print("epoch: %d \t split: %d \t batch: %d \t avg_loss: %f" %
+                          (epoch_id, split_id, batch_id+1, running_loss.value()))
+                    running_loss.clear()
+            # 数据训练完毕
+            if running_loss.count() > 0:
+                print("epoch: %d \t split: %d \t batch: %d \t avg_loss: %f" %
+                      (epoch_id, split_id, batch_id+1, running_loss.value()))
 
-            # 计算该epoch后的测试mAP
+            # 使用测试集时计算top-k
+            mean_top_k = check_top_k(test_data, test_ids, test_ids, transforms=transforms,
+                                     net_model=net, device=device, top_k=top_k)
+            print("epoch: %d, split: %d, test top-k: %s" % (epoch_id, split_id, mean_top_k))
+            # 保存较好的模型
+            if is_better_top_k(old_top_k=better_top_k, new_top_k=mean_top_k):
+                better_top_k = mean_top_k[:]
+                save_model_params(k=top_k, top_k=better_top_k, model_folder=model_folder, model=net)
 
 
 if __name__ == '__main__':
-    # main("/home/haofeng/Desktop/datasets/dst/prid_2011/src")
-    # splits = get_splits('./prid2011_splits.json', person_num=200)
-    # print(splits)
-    # for s in splits:
-    #     print(s["split_id"], len(s["train_ids"]), len(s["test_ids"]))
-    # print("over!")
-
-    main2(dataset_folder="/home/haofeng/Desktop/datasets/dst/prid_2011/src",
-          data_npz_file="/home/haofeng/Desktop/datasets/dst/prid_2011/src_array.npz",
-          epoch_train=40)
+    main(dataset_folder="/home/haofeng/Desktop/datasets/dst/prid_2011/src",
+         data_npz_file="/home/haofeng/Desktop/datasets/dst/prid_2011/src_array.npz",
+         epoch_train=10, batch_size=8, snippet_len=8, snippet_stride=3,
+         model_folder="../saved_models")

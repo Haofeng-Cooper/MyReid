@@ -79,9 +79,9 @@ class ResNet(nn.Module):
         if self.final_pool is None:
             return x
         if self.final_pool == "avg":
-            x = torch.mean(x, dim=0, keepdim=True)
+            x = torch.mean(x, dim=0)
         elif self.final_pool == "max":
-            x = torch.max(x, dim=0, keepdim=True)[0]             # torch.max()不仅返回最大值，还返回最大值索引
+            x = torch.max(x, dim=0)[0]             # torch.max()不仅返回最大值，还返回最大值索引
         else:
             raise ValueError("不支持的最后特征池化类型: {}".format(self.final_pool))
 

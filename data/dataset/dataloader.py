@@ -5,7 +5,8 @@ import os.path as osp
 from glob import glob
 import cv2
 import numpy as np
-from myutils.func import print_process, list_sublist
+import random
+from myutils.func import print_process, list_sublist, list_shape
 from myutils.listutils import list_choice
 
 
@@ -94,23 +95,95 @@ def train_data_loader(train_ids, probe_gallery_data, seq_range_, cam_offset_, ba
             positive_pid = anchor_pid
             negative_pid = list_choice(train_ids, positive_pid)
 
-            anchor_seq_info = seq_range_[anchor_pid + cam_offset_[0]]
-            positive_seq_info = seq_range_[positive_pid + cam_offset_[1]]
-            negative_seq_info = seq_range_[negative_pid + cam_offset_[1]]
+            anchor_seq_info = seq_range_[cam_offset_[0] + anchor_pid]
+            positive_seq_info = seq_range_[cam_offset_[1] + positive_pid]
+            negative_seq_info = seq_range_[cam_offset_[1] + negative_pid]
 
             # print("计算得：anchor真实行人索引{}，positive行人索引{}，negative行人索引{}".format(
             #     anchor_pid, positive_pid, negative_pid))
             # print("取片段：anchor真实行人索引{}，positive行人索引{}，negative行人索引{}".format(
             #     anchor_seq_info[0], positive_seq_info[0], negative_seq_info[0]))
 
-            anchor = probe_gallery_data[anchor_seq_info[1]: anchor_seq_info[2]]
-            positive = probe_gallery_data[positive_seq_info[1]: positive_seq_info[2]]
-            negative = probe_gallery_data[negative_seq_info[1]: negative_seq_info[2]]
+            anchor = probe_gallery_data[anchor_seq_info[1]: anchor_seq_info[2]][0:5]
+            positive = probe_gallery_data[positive_seq_info[1]: positive_seq_info[2]][0:5]
+            negative = probe_gallery_data[negative_seq_info[1]: negative_seq_info[2]][0:5]
 
             batch_result.append([anchor, positive, negative])
             index += 1
         result.append(batch_result)
     return result
+
+
+def train_data_loader2(train_ids, probe_gallery_data, seq_range_, cam_offset_, batch_size=8, shuffle=True,
+                       snippet_len=8, snippet_stride=3):
+    """
+    返回每个 batch 的 anchor, positive, negative 样本数据（进行片段分割）
+    以第一个相机下的数据为probe，第二个相机下的数据为gallery
+
+    train_ids 可以是乱序的
+    """
+    person_num = len(train_ids)       # 用于训练的行人索引数
+
+    # 获取每个行人的所有片断分割（snippets）
+    person_probe_snippets, person_gallery_snippets = [], []
+    for pid in train_ids:
+        person_seq_probe_info = seq_range_[cam_offset_[0] + pid]
+        person_seq_gallery_info = seq_range_[cam_offset_[1] + pid]
+
+        person_probe_seq = probe_gallery_data[person_seq_probe_info[1]: person_seq_probe_info[2]]
+        person_gallery_seq = probe_gallery_data[person_seq_gallery_info[1]: person_seq_gallery_info[2]]
+
+        probe_snippets = seq_2_snippets(seq=person_probe_seq, snippet_len=snippet_len, stride=snippet_stride)
+        gallery_snippets = seq_2_snippets(seq=person_gallery_seq, snippet_len=snippet_len, stride=snippet_stride)
+
+        person_probe_snippets.append(probe_snippets)
+        person_gallery_snippets.append(gallery_snippets)
+
+    # 为每个probe_snippet选择一个正样本和负样本，组合在一起
+    all_apn = []
+    index_list = list(range(person_num))
+    for index, p_snippets in enumerate(person_probe_snippets):
+        for s_id, anchor in enumerate(p_snippets):
+            positive = random.choice(person_gallery_snippets[index])        # 同一个行人在gallery中的随机一个片段为positive
+
+            n_index = list_choice(index_list, index)                        # 随机选另外一个行人作为负样本行人
+            negative = random.choice(person_gallery_snippets[n_index])      # 随机选一个片段作为负样本片段
+            all_apn.append([anchor, positive, negative])
+
+    # 顺序打乱
+    if shuffle:
+        random.shuffle(all_apn)
+
+    # batch划分
+    apn_num = len(all_apn)
+    batch_num = math.ceil(apn_num / batch_size)
+    result = []
+    index = 0
+    for i in range(batch_num):
+        batch_data = []
+        for j in range(batch_size):
+            batch_data.append(all_apn[index % apn_num])
+            index += 1
+        result.append(batch_data)
+    return result
+
+
+def test_data_loader(test_ids, probe_gallery_data, seq_range_, cam_offset_):
+    """
+    测试数据加载器
+    返回用于测试的行人视频序列（不分段）(probe和gallery)
+    """
+    person_probe_seqs, person_gallery_seqs = [], []
+    for pid in test_ids:
+        person_seq_probe_info = seq_range_[cam_offset_[0] + pid]
+        person_seq_gallery_info = seq_range_[cam_offset_[1] + pid]
+
+        probe_seq = probe_gallery_data[person_seq_probe_info[1]: person_seq_probe_info[2]]
+        gallery_seq = probe_gallery_data[person_seq_gallery_info[1]: person_seq_gallery_info[2]]
+
+        person_probe_seqs.append(probe_seq)
+        person_gallery_seqs.append(gallery_seq)
+    return person_probe_seqs, person_gallery_seqs
 
 
 def dataset_reader(folder: str):
@@ -199,6 +272,36 @@ def snippets_list_concat(snippets_list: list, person_ids):
         label_list += [person_ids[i] for _ in range(len(snippets))]
         start_index_list.append(start_index_list[-1] + len(snippets))
     return result_list, label_list, start_index_list
+
+
+def seq_2_snippets(seq, snippet_len=8, stride=3):
+    """
+    帧序列变为多个帧片段
+    返回 n * snippet_len * FRAME，其中 n 为划分的片段数
+
+    :param seq: 帧序列
+    :param snippet_len: 片段的帧长度
+    :param stride: 片段划分的步长
+    """
+    snippets = []
+    seq_len = len(seq)
+    if seq_len <= snippet_len:
+        snippet_i = []
+        for i in range(seq_len):
+            snippet_i.append(seq[i])
+        for i in range(seq_len, snippet_len):
+            snippet_i.append(seq[-1])
+        snippets.append(snippet_i)
+    else:
+        snippet_num = (seq_len-snippet_len) // stride + 1
+        for snippet_id in range(snippet_num):
+            snippet_i = []
+            start_fid = snippet_id * stride
+            stop_fid = start_fid + snippet_len
+            for frame_id in range(start_fid, stop_fid):
+                snippet_i.append(seq[frame_id])
+            snippets.append(snippet_i)
+    return snippets
 
 
 if __name__ == '__main__':
