@@ -319,7 +319,7 @@ if __name__ == '__main__':
     #     print(index_list)
 
     image_data, seq_range, cam_offset = dataset_reader2("/home/haofeng/Desktop/datasets/dst/prid_2011/src",
-                    save_file="/home/haofeng/Desktop/datasets/dst/prid_2011/src_array.npz")
+                    save_file="/home/haofeng/Desktop/datasets/dst/prid_2011/src_array.npz", force_re=True)
     print(image_data.shape, seq_range.shape, cam_offset.shape)
     print(image_data.dtype)
     # for i in range(3):

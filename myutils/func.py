@@ -108,13 +108,13 @@ def copy_file(src_file, dst_file):
         shutil.copy(src_file, dst_file)
 
 
-def print_process(cur, total, sign_num=20, sign_ch='#'):
+def print_process(cur, total, sign_num=20, sign_ch='#', extra_info=""):
     """
     打印进度条
     """
     rate = cur / total
     show_sign_num = max(int(rate * sign_num), 1)
-    print('\r进度：%s %.2f%%\t%d/%d\t' % (sign_ch*show_sign_num, rate*100, cur, total), end='')
+    print('\r进度：%s %.2f%%\t%d/%d\t%s' % (sign_ch*show_sign_num, rate*100, cur, total, extra_info), end='')
     if cur == total:
         print("")
 

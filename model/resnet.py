@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 # 在pytorch的ResNet的基础上自定义的Resnet
-
+import math
 
 import torch
 import torchvision
@@ -16,9 +16,10 @@ class ResNet(nn.Module):
         152: torchvision.models.resnet152,
     }
 
-    def __init__(self, depth=50, pre_trained=True, cut_after_avgpool=True, out_features=1024, final_pool=None):
+    def __init__(self, in_channels=3, depth=50, pre_trained=True, cut_after_avgpool=True, out_features=1024, final_pool=None):
         """
 
+        :param in_channels 输入通道数
         :param depth: 网络深度
         :param pre_trained: 是否使用预训练的模型
         :param cut_after_avgpool: 是否在avgpool层之后截断网络
@@ -45,6 +46,11 @@ class ResNet(nn.Module):
         nn.init.constant_(self.fc.bias, self.bias_default)
         # nn.init.constant_(self.fc_bn.weight, self.weight_default)
         # nn.init.constant_(self.fc_bn.bias, self.bias_default)
+
+        if in_channels != 3:
+            self.base_resnet.conv1 = nn.Conv2d(in_channels=in_channels, out_channels=64, kernel_size=(7, 7),
+                                               stride=(2, 2), padding=(3, 3), bias=False)
+            nn.init.kaiming_uniform_(self.base_resnet.conv1.weight, mode="fan_out")
 
         if not pre_trained:
             self.reset_params()
@@ -101,3 +107,19 @@ class ResNet(nn.Module):
                 nn.init.normal_(layer.weight, std=0.001)
                 if layer.bias is not None:
                     nn.init.constant_(layer.bias, self.bias_default)
+
+    def print_layers_info(self):
+        print("-----------------------------model info started-----------------------------------")
+        for name, module in self._modules.items():
+            print(module)
+        print("-----------------------------model info finished-----------------------------------")
+
+
+if __name__ == '__main__':
+    channel_num = 6
+    input_x = torch.rand(size=(8, channel_num, 128, 64), dtype=torch.float)
+    net = ResNet(in_channels=channel_num, depth=18, pre_trained=True)
+
+    output_x = net(input_x)
+    print(output_x.shape)
+    net.print_layers_info()

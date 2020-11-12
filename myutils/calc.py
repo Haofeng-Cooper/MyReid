@@ -1,3 +1,5 @@
+import time
+
 
 class AverageCalc:
     def __init__(self):
@@ -17,6 +19,30 @@ class AverageCalc:
 
     def count(self):
         return self.__count
+
+
+class LoopTimeCalc:
+    """统计循环耗时"""
+    def __init__(self):
+        self.__avgCalc = AverageCalc()
+        self.__last_time = time.time()
+
+    def restart(self):
+        self.__avgCalc.clear()
+        self.__last_time = time.time()
+
+    def update(self):
+        cur_time = time.time()
+        diff_time = cur_time - self.__last_time
+        self.__avgCalc.update(diff_time)
+        self.__last_time = cur_time
+
+    # def clear(self):
+    #     self.__avgCalc.clear()
+    #     self.__last_time = time.time()
+
+    def avg_time(self):
+        return self.__avgCalc.value()
 
 
 if __name__ == '__main__':
